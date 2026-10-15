@@ -143,7 +143,11 @@ search, semantic tracing, and version comparison use the preserved values.
 Event and listener nodes likewise preserve the complete event name in
 `properties.event_name`. Event role keys use the same reserved-prefix string
 digest rule, scoped to the emitter; repeated registrations, removals, and
-dispatches keep one event per exact emitter/name pair. Long event labels use
+dispatches keep one event per exact emitter/name pair. Unresolved receiver
+expressions, including `this` in methods, ordinary functions, and arrows, keep
+separate source-occurrence identities with candidate relations and explicit
+event unknowns. A class or callable identity does not prove a shared receiver
+instance. Long event labels use
 `event`, and listener labels use the shorter of `<method>:<name>` and
 `<method>:listener`. Dynamic names remain `null` with explicit uncertainty. New analyses
 change hashed event IDs and longer event/listener labels; query the preserved

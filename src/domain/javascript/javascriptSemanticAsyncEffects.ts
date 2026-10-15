@@ -198,8 +198,8 @@ const emitterIdentity = (
       complete: !semanticResolutionBlocked(state, node, node.name),
     };
   }
-  if (t.isThisExpression(node))
-    return { key: "this", bindingId: null, complete: true };
+  // Receiver syntax (including `this`) does not identify a runtime instance.
+  // Keep each expression separate until its receiver identity is proven.
   return {
     key: `expression:${String(node.start ?? -1)}:${String(node.end ?? -1)}`,
     bindingId: null,
