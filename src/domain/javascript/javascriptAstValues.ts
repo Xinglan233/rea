@@ -98,6 +98,28 @@ export const semanticStaticPropertyKey = (
   return !computed && t.isIdentifier(property) ? property.name : null;
 };
 
+/** Find the effective explicit property, preserving unresolved overrides. */
+export const staticObjectProperty = (
+  object: t.Node | undefined,
+  name: string,
+):
+  | { readonly status: "missing" | "dynamic" }
+  | { readonly status: "explicit"; readonly property: t.ObjectProperty } => {
+  if (object === undefined) return { status: "missing" };
+  if (!t.isObjectExpression(object)) return { status: "dynamic" };
+  for (const property of object.properties.toReversed()) {
+    if (t.isSpreadElement(property)) return { status: "dynamic" };
+    const key = semanticStaticPropertyName(property.key, property.computed);
+    if (key === "" && !t.isStringLiteral(property.key))
+      return { status: "dynamic" };
+    if (key !== name) continue;
+    return t.isObjectProperty(property)
+      ? { status: "explicit", property }
+      : { status: "dynamic" };
+  }
+  return { status: "missing" };
+};
+
 /** Read exact consumed object-pattern keys, leaving dynamic keys unknown. */
 export const semanticObjectPatternKeys = (
   pattern: t.ObjectPattern,

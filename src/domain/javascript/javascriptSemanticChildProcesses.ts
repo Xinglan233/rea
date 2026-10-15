@@ -8,6 +8,7 @@ import type {
 import { createSemanticCallableIdStack } from "./javascriptSemanticCallableStack.js";
 import {
   semanticStaticPropertyName,
+  staticObjectProperty,
   unwrapJavaScriptExpression,
 } from "./javascriptAstValues.js";
 import {
@@ -62,7 +63,7 @@ export const collectJavaScriptSemanticChildProcesses = (
 ): ChildProcessAnalysis => {
   const candidates = collectSpawns(program, state, callables);
   const childProcessSpawns = candidates.map((candidate) =>
-    immutableSpawn(candidate),
+    immutableSpawn(candidate, state),
   );
   return {
     childProcessSpawns,
@@ -124,6 +125,7 @@ const collectSpawns = (
 
 const immutableSpawn = (
   candidate: SpawnCandidate,
+  state: JavaScriptSemanticAnalysisState,
 ): JavaScriptSemanticChildProcessSpawn => {
   const options = spawnOptions(candidate);
   const command = dataEffectLiteralString(candidate.node.arguments[0]);
@@ -137,7 +139,7 @@ const immutableSpawn = (
     command,
     argvCount: spawnArgvCount(candidate),
     environmentSupplied: objectHasProperty(options, "env"),
-    stdioMode: stdioMode(options),
+    stdioMode: stdioMode(options, candidate.method, state),
     resolution: command === null ? "partial" : "complete",
   };
 };
@@ -301,17 +303,14 @@ const resolveChildCandidates = (
     ? []
     : (spawnsByBinding.get(binding.bindingId) ?? []);
 };
-const spawnOptions = (candidate: SpawnCandidate): t.ObjectExpression | null => {
+const spawnOptions = (candidate: SpawnCandidate): t.Node | undefined => {
   const args = candidate.node.arguments;
-
-  const value =
-    candidate.method === "exec"
-      ? args[1]
-      : t.isObjectExpression(args[1])
-        ? args[1]
-        : args[2];
-
-  return t.isObjectExpression(value) ? value : null;
+  if (candidate.method === "exec" || t.isObjectExpression(args[1]))
+    return args[1];
+  if (t.isArrayExpression(args[1])) return args[2];
+  // A nonliteral second argument can itself be options. Do not erase it
+  // into an omitted default, including execFile(file, options, callback).
+  return args[2] === undefined || t.isFunction(args[2]) ? args[1] : args[2];
 };
 const spawnArgvCount = (candidate: SpawnCandidate): number | null => {
   if (candidate.method === "exec") return null;
@@ -322,30 +321,43 @@ const spawnArgvCount = (candidate: SpawnCandidate): number | null => {
     : null;
 };
 
-const objectHasProperty = (
-  object: t.ObjectExpression | null,
-  name: string,
-): boolean => objectProperty(object, name) !== null;
+const objectHasProperty = (object: t.Node | undefined, name: string): boolean =>
+  t.isObjectExpression(object) &&
+  object.properties.some(
+    (property) =>
+      !t.isSpreadElement(property) &&
+      semanticStaticPropertyName(property.key, property.computed) === name,
+  );
 
-const stdioMode = (options: t.ObjectExpression | null): string => {
-  const property = objectProperty(options, "stdio");
-  if (property === null || !t.isObjectProperty(property)) return "default";
-  if (t.isStringLiteral(property.value)) return property.value.value;
-  if (t.isArrayExpression(property.value)) return "array";
+const stdioMode = (
+  options: t.Node | undefined,
+  method: JavaScriptSemanticChildProcessSpawn["method"],
+  state: JavaScriptSemanticAnalysisState,
+): string => {
+  if (options === undefined) return "default";
+  const expression = unwrapJavaScriptExpression(options).node;
+  if (
+    defaultOptionValue(expression, state) ||
+    ((method === "exec" || method === "execFile") && t.isFunction(expression))
+  )
+    return "default";
+  const lookup = staticObjectProperty(expression, "stdio");
+  if (lookup.status === "missing") return "default";
+  if (lookup.status !== "explicit") return "dynamic";
+  const value = unwrapJavaScriptExpression(lookup.property.value).node;
+  if (defaultOptionValue(value, state)) return "default";
+  if (t.isStringLiteral(value)) return value.value;
+  if (t.isArrayExpression(value)) return "array";
   return "dynamic";
 };
 
-const objectProperty = (
-  object: t.ObjectExpression | null,
-  name: string,
-): t.ObjectMethod | t.ObjectProperty | null =>
-  object?.properties.find(
-    (property): property is t.ObjectMethod | t.ObjectProperty =>
-      (t.isObjectMethod(property) || t.isObjectProperty(property)) &&
-      // `{[env]: vars}` has a dynamic key; treating it as `env` would claim
-      // the caller supplied an environment when the real key is unknown.
-      semanticStaticPropertyName(property.key, property.computed) === name,
-  ) ?? null;
+const defaultOptionValue = (
+  value: t.Node,
+  state: JavaScriptSemanticAnalysisState,
+): boolean =>
+  t.isNullLiteral(value) ||
+  t.isUnaryExpression(value, { operator: "void" }) ||
+  isUnshadowedGlobal(value, state, "undefined");
 
 const objectBinding = (
   node: t.Expression | t.Super,
